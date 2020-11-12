@@ -411,7 +411,8 @@ class ExpectedConstrainedImprovement(AcquisitionFunctionBuilder):
     """
     Builder for the _expected constrained improvement_ acquisition function defined in
     Gardner, 2014. The acquisition function computes the expected improvement from the best
-    feasible point, where feasible points are those that (probably) satisfy some constraint.
+    feasible point, where feasible points are those that (probably) satisfy some constraint. Where
+    there are no feasible points, this builder simply builds the constraint function.
 
     See the following for details:
 
@@ -461,7 +462,7 @@ class ExpectedConstrainedImprovement(AcquisitionFunctionBuilder):
         self._min_feasibility_probability = min_feasibility_probability
 
     def prepare_acquisition_function(
-        self, datasets: Mapping[str, Dataset], models: Mapping[str, ModelInterface]
+        self, datasets: Mapping[str, Dataset], models: Mapping[str, ProbabilisticModel]
     ) -> AcquisitionFunction:
         """
         :param datasets: The data from the observer.
@@ -482,16 +483,12 @@ class ExpectedConstrainedImprovement(AcquisitionFunctionBuilder):
 
         constraint_fn = self._constraint_builder.prepare_acquisition_function(datasets, models)
         pof = constraint_fn(objective_dataset.query_points)
-        is_not_feasible = pof < self._min_feasibility_probability
+        is_feasible = pof >= self._min_feasibility_probability
 
-        if tf.reduce_all(is_not_feasible):
+        if not tf.reduce_any(is_feasible):
             return constraint_fn
 
         mean, _ = objective_model.predict(objective_dataset.query_points)
-        range_of_mean = tf.reduce_max(mean) - tf.reduce_min(mean)
-        penalization = self._PENALIZATION_FACTOR * range_of_mean * tf.cast(
-            is_not_feasible, mean.dtype
-        )
-        eta = tf.reduce_min(mean + penalization, axis=0)
+        eta = tf.reduce_min(tf.boolean_mask(mean, is_feasible), axis=0)
 
         return lambda at: expected_improvement(objective_model, eta, at) * constraint_fn(at)
